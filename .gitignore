@@ -1,0 +1,12 @@
+/build/
+/obj_dir/
+/simv
+/simv.daidir/
+/simv.vdb/
+/csrc/
+/ucli.key
+/core
+/core.*
+*.vcd
+*.vpd
+*.fsdb

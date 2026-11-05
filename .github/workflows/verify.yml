@@ -1,0 +1,31 @@
+name: FIFO verification
+on:
+  push:
+    paths:
+      - '**.sv'
+      - 'scripts/**'
+      - '.github/workflows/verify.yml'
+  pull_request:
+    paths:
+      - '**.sv'
+      - 'scripts/**'
+      - '.github/workflows/verify.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Verilator
+        run: sudo apt-get update && sudo apt-get install -y verilator
+      - name: Scoreboard, SVA, clock ratios, parameters, and checker fault injection
+        run: python3 scripts/regress.py
+      - name: Keep simulation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fifo-verification-logs
+          path: build/**/*.log

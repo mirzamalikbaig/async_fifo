@@ -1,118 +1,118 @@
 `timescale 1ns/1ps
 
-module async_fifo(
-  wr_clk_i, rd_clk_i, rst_i,
-  wr_en_i, wdata_i, full_o, overflow_o,
-  rd_en_i, rdata_o, empty_o, underflow_o
+module async_fifo #(
+  parameter int unsigned DEPTH = 16,
+  parameter int unsigned PTR_WIDTH = $clog2(DEPTH),
+  parameter int unsigned DATA_WIDTH = 8
+) (
+  input  logic                  wr_clk_i,
+  input  logic                  rd_clk_i,
+  input  logic                  rst_i,
+  input  logic                  wr_en_i,
+  input  logic [DATA_WIDTH-1:0] wdata_i,
+  output logic                  full_o,
+  output logic                  overflow_o,
+  input  logic                  rd_en_i,
+  output logic [DATA_WIDTH-1:0] rdata_o,
+  output logic                  empty_o,
+  output logic                  underflow_o
 );
 
-  parameter DEPTH = 16;
-  parameter PTR_WIDTH = $clog2(DEPTH);
-  parameter DATA_WIDTH = 8;
+  // One extra pointer bit distinguishes successive laps around the memory.
+  localparam logic [PTR_WIDTH:0] FULL_MASK = {2'b11, {(PTR_WIDTH-1){1'b0}}};
+  logic [PTR_WIDTH:0] wr_bin, wr_bin_next, wr_gray, wr_gray_next;
+  logic [PTR_WIDTH:0] rd_bin, rd_bin_next, rd_gray, rd_gray_next;
+  logic [DATA_WIDTH-1:0] mem [0:DEPTH-1];
+  logic full_next, empty_next;
+  logic wr_reset, rd_reset;
 
-  input wr_clk_i, rd_clk_i, rst_i, wr_en_i, rd_en_i;
-  input [DATA_WIDTH-1:0] wdata_i;
+  // Asynchronous assertion, synchronous release in each local clock domain.
+  (* ASYNC_REG = "TRUE" *) logic [1:0] wr_reset_pipe, rd_reset_pipe;
+  always_ff @(posedge wr_clk_i or posedge rst_i) begin
+    if (rst_i) wr_reset_pipe <= '1;
+    else       wr_reset_pipe <= {wr_reset_pipe[0], 1'b0};
+  end
+  always_ff @(posedge rd_clk_i or posedge rst_i) begin
+    if (rst_i) rd_reset_pipe <= '1;
+    else       rd_reset_pipe <= {rd_reset_pipe[0], 1'b0};
+  end
+  assign wr_reset = wr_reset_pipe[1];
+  assign rd_reset = rd_reset_pipe[1];
 
-  output reg full_o, overflow_o, empty_o, underflow_o;
-  output reg [DATA_WIDTH-1:0] rdata_o;
-
-  reg [PTR_WIDTH-1:0] wr_ptr, rd_ptr;
-  reg wr_toggle_f, rd_toggle_f;
-
-  reg [PTR_WIDTH-1:0] wr_ptr_rd_clk, rd_ptr_wr_clk;
-  reg wr_toggle_f_rd_clk, rd_toggle_f_wr_clk;
-
-  integer i;
-  reg [DATA_WIDTH-1:0] mem [0:DEPTH-1];
-
-  // Write
-  always @(posedge wr_clk_i) begin
-    if (rst_i) begin
-      full_o      = 1'b0;
-      rdata_o     = {DATA_WIDTH{1'b0}};
-      overflow_o  = 1'b0;
-      empty_o     = 1'b1;
-      underflow_o = 1'b0;
-      wr_ptr      = '0;
-      rd_ptr      = '0;
-      wr_toggle_f = 1'b0;
-      rd_toggle_f = 1'b0;
-
-      for (i = 0; i < DEPTH; i = i + 1) begin
-        mem[i] = '0;
-      end
+  // Only registered Gray pointers cross clock domains. Never use stage 1
+  // for flags or memory addresses; stage 2 is the synchronized observation.
+  (* ASYNC_REG = "TRUE" *) logic [PTR_WIDTH:0] rd_gray_wsync1, rd_gray_wsync2;
+  (* ASYNC_REG = "TRUE" *) logic [PTR_WIDTH:0] wr_gray_rsync1, wr_gray_rsync2;
+  always_ff @(posedge wr_clk_i or posedge wr_reset) begin
+    if (wr_reset) begin
+      rd_gray_wsync1 <= '0;
+      rd_gray_wsync2 <= '0;
     end else begin
-      overflow_o = 1'b0;
-
-      if (wr_en_i) begin
-        if (full_o == 1'b1) begin
-          overflow_o = 1'b1;
-        end else begin
-          mem[wr_ptr] = wdata_i;
-
-          if (wr_ptr == (DEPTH - 1)) begin
-            wr_toggle_f = ~wr_toggle_f;
-            wr_ptr = '0;
-          end else begin
-            wr_ptr = wr_ptr + 1'b1;
-          end
-        end
-      end
+      rd_gray_wsync1 <= rd_gray;
+      rd_gray_wsync2 <= rd_gray_wsync1;
+    end
+  end
+  always_ff @(posedge rd_clk_i or posedge rd_reset) begin
+    if (rd_reset) begin
+      wr_gray_rsync1 <= '0;
+      wr_gray_rsync2 <= '0;
+    end else begin
+      wr_gray_rsync1 <= wr_gray;
+      wr_gray_rsync2 <= wr_gray_rsync1;
     end
   end
 
-  // Read
-  always @(posedge rd_clk_i) begin
-    if (rst_i == 0) begin
-      underflow_o = 1'b0;
+  assign wr_bin_next  = wr_bin + {{PTR_WIDTH{1'b0}}, (wr_en_i && !full_o)};
+  assign rd_bin_next  = rd_bin + {{PTR_WIDTH{1'b0}}, (rd_en_i && !empty_o)};
+  assign wr_gray_next = (wr_bin_next >> 1) ^ wr_bin_next;
+  assign rd_gray_next = (rd_bin_next >> 1) ^ rd_bin_next;
+  // In Gray space, full requires inversion of the TOP TWO pointer bits.
+  assign full_next  = (wr_gray_next == (rd_gray_wsync2 ^ FULL_MASK));
+  assign empty_next = (rd_gray_next == wr_gray_rsync2);
 
-      if (rd_en_i) begin
-        if (empty_o == 1'b1) begin
-          underflow_o = 1'b1;
-        end else begin
-          rdata_o = mem[rd_ptr];
-
-          if (rd_ptr == (DEPTH - 1)) begin
-            rd_toggle_f = ~rd_toggle_f;
-            rd_ptr = '0;
-          end else begin
-            rd_ptr = rd_ptr + 1'b1;
-          end
-        end
-      end
+  always_ff @(posedge wr_clk_i or posedge wr_reset) begin
+    if (wr_reset) begin
+      wr_bin     <= '0;
+      wr_gray    <= '0;
+      full_o     <= 1'b0;
+      overflow_o <= 1'b0;
+    end else begin
+      wr_bin     <= wr_bin_next;
+      wr_gray    <= wr_gray_next;
+      full_o     <= full_next;
+      overflow_o <= wr_en_i && full_o;
     end
   end
 
-  // Write pointer into read domain
-  always @(posedge rd_clk_i) begin
-    wr_ptr_rd_clk      <= wr_ptr;
-    wr_toggle_f_rd_clk <= wr_toggle_f;
+  // One writer and one reader; reset invalidates contents via the pointers.
+  // Omitting a memory reset loop permits dual-port RAM inference.
+  always_ff @(posedge wr_clk_i) begin
+    if (!wr_reset && wr_en_i && !full_o)
+      mem[wr_bin[PTR_WIDTH-1:0]] <= wdata_i;
   end
-
-  // Read pointer into write domain
-  always @(posedge wr_clk_i) begin
-    rd_ptr_wr_clk      <= rd_ptr;
-    rd_toggle_f_wr_clk <= rd_toggle_f;
-  end
-
-  // Full condition
-  always @(posedge wr_clk_i) begin
-    full_o = 1'b0;
-
-    if ((wr_ptr == rd_ptr_wr_clk) &&
-        (wr_toggle_f != rd_toggle_f_wr_clk)) begin
-      full_o = 1'b1;
+  always_ff @(posedge rd_clk_i or posedge rd_reset) begin
+    if (rd_reset) begin
+      rd_bin      <= '0;
+      rd_gray     <= '0;
+      empty_o     <= 1'b1;
+      underflow_o <= 1'b0;
+      rdata_o     <= '0;
+    end else begin
+      rd_bin      <= rd_bin_next;
+      rd_gray     <= rd_gray_next;
+      empty_o     <= empty_next;
+      underflow_o <= rd_en_i && empty_o;
+      if (rd_en_i && !empty_o)
+        rdata_o <= mem[rd_bin[PTR_WIDTH-1:0]];
     end
   end
 
-  // Empty condition
-  always @(*) begin
-    empty_o = 1'b0;
-
-    if ((wr_ptr_rd_clk == rd_ptr) &&
-        (wr_toggle_f_rd_clk == rd_toggle_f)) begin
-      empty_o = 1'b1;
-    end
+  // synopsys translate_off
+  initial begin
+    if (DEPTH < 2 || (DEPTH & (DEPTH-1)) != 0)
+      $fatal(1, "DEPTH must be a power of two and at least 2");
+    if (PTR_WIDTH != $clog2(DEPTH) || DATA_WIDTH < 1)
+      $fatal(1, "PTR_WIDTH must equal clog2(DEPTH); DATA_WIDTH must be positive");
   end
-
+  // synopsys translate_on
 endmodule
