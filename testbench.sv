@@ -169,7 +169,8 @@ module tb #(
     cycles = 0;
     while (empty_o) begin
       @(negedge rd_clk_i);
-      if (++cycles > 8) $fatal(1, "Written data never became readable");
+      cycles++;
+      if (cycles > 8) $fatal(1, "Written data never became readable");
     end
   endtask
 
@@ -180,7 +181,8 @@ module tb #(
     rd_en_i = 1;
     while (expected.size() != 0) begin
       @(negedge rd_clk_i);
-      if (++cycles > 8 * DEPTH + 32) $fatal(1, "Drain timeout");
+      cycles++;
+      if (cycles > 8 * DEPTH + 32) $fatal(1, "Drain timeout");
     end
     rd_en_i = 0;
     repeat (4) @(negedge rd_clk_i);
