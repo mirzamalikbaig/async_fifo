@@ -74,7 +74,7 @@ module tb #(
       end
       if (rejected) overflows++;
       #1ps;
-      if (overflow_o !== rejected)
+      if (!rst_i && !dut.wr_reset && overflow_o !== rejected)
         $fatal(1, "Scoreboard: incorrect overflow pulse");
     end
   end
@@ -102,11 +102,17 @@ module tb #(
       end
       if (rejected) underflows++;
       #1ps;
-      if (rdata_o !== wanted)
-        $fatal(1, "Scoreboard: data mismatch expected=%h actual=%h", wanted, rdata_o);
-      if (underflow_o !== rejected)
-        $fatal(1, "Scoreboard: incorrect underflow pulse");
-      held_rdata = wanted;
+      // Reset may assert at this edge; its asynchronous data clear takes
+      // precedence over a read/hold comparison scheduled before NBA updates.
+      if (rst_i || dut.rd_reset) begin
+        held_rdata = '0;
+      end else begin
+        if (rdata_o !== wanted)
+          $fatal(1, "Scoreboard: data mismatch expected=%h actual=%h", wanted, rdata_o);
+        if (underflow_o !== rejected)
+          $fatal(1, "Scoreboard: incorrect underflow pulse");
+        held_rdata = wanted;
+      end
     end
   end
 

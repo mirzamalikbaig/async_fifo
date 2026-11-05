@@ -10,3 +10,4 @@
 *.vcd
 *.vpd
 *.fsdb
+__pycache__/

@@ -25,7 +25,8 @@ def execute(command, logfile, *, expected_failure=False, marker=None):
     logfile.parent.mkdir(parents=True, exist_ok=True)
     logfile.write_text(result.stdout)
     if expected_failure:
-        if result.returncode == 0 or (marker and marker not in result.stdout):
+        markers = (marker,) if isinstance(marker, str) else marker
+        if result.returncode == 0 or (markers and not any(m in result.stdout for m in markers)):
             raise RuntimeError(f'Negative test did not fail as expected: {logfile}\n{result.stdout}')
     elif result.returncode:
         raise RuntimeError(f'Command failed: {command}\n{result.stdout}')
@@ -79,7 +80,7 @@ def main():
          "rdata_o <= mem[rd_bin[PTR_WIDTH-1:0]] ^ {{(DATA_WIDTH-1){1'b0}}, 1'b1};",
          'Scoreboard: data mismatch'),
         ('bad_gray', 'wr_gray    <= wr_gray_next;', 'wr_gray    <= wr_bin_next;',
-         'Write binary/Gray encoding mismatch'),
+         ('Write binary/Gray encoding mismatch', 'Write Gray pointer changed multiple bits')),
     ]
     for name, old, new, marker in mutations:
         if source.count(old) != 1:
@@ -87,9 +88,11 @@ def main():
         mutant = BUILD / f'{name}.sv'
         mutant.write_text(source.replace(old, new))
         binary = build(name, 16, 8, 5, 7, 0, source=mutant)
-        execute([str(binary), '+TEST=test_full'], BUILD / name / 'expected_failure.log',
-                expected_failure=True, marker=marker)
-        summaries.append(f'NEGATIVE PASS {name}: detected {marker}')
+        output = execute([str(binary), '+TEST=test_full'], BUILD / name / 'expected_failure.log',
+                         expected_failure=True, marker=marker)
+        markers = (marker,) if isinstance(marker, str) else marker
+        detected = next(m for m in markers if m in output)
+        summaries.append(f'NEGATIVE PASS {name}: detected {detected}')
         print(summaries[-1], flush=True)
 
     summaries.append(f'REGRESSION PASS: {count} simulations, 2 expected-failure checker tests')
