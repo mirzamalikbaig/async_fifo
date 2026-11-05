@@ -80,7 +80,9 @@ vcs -full64 -sverilog -assert svaext +incdir+. \
 
 ## Results and scope
 
-The upgraded regression is being validated. The old [VCS `test_full` log](results/test_full.log) belongs to the original binary-pointer version and is retained as history; it does not validate this upgrade.
+My upgraded regression passed on GitHub Actions on November 5, 2026: **19 positive simulations and both expected-failure checker tests passed**. The 13 SVA checks were enabled. See the [verification run](https://github.com/mirzamalikbaig/async_fifo/actions/runs/42044672600) for the result and downloadable logs.
+
+The old [VCS `test_full` log](results/test_full.log) belongs to the original binary-pointer version and is retained as history; it does not validate this upgrade.
 
 Simulation checks ordering and control behavior. It does not model analog metastability or replace CDC analysis, implementation timing constraints, or hardware validation. Gray-bus skew/max-delay constraints and tool-specific synchronizer placement must be reviewed for the target technology. RAM inference also depends on the synthesis target. This implementation uses a common reset for both sides; independent one-sided resets are outside its contract.
 
