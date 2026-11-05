@@ -30,10 +30,16 @@ module tb #(
   );
 
   initial forever #(WR_HALF_NS * 1ns) wr_clk_i = ~wr_clk_i;
-  initial begin
-    #(RD_PHASE_NS * 1ns);
-    forever #(RD_HALF_NS * 1ns) rd_clk_i = ~rd_clk_i;
-  end
+  generate
+    if (RD_PHASE_NS == 0) begin : no_read_phase
+      initial forever #(RD_HALF_NS * 1ns) rd_clk_i = ~rd_clk_i;
+    end else begin : shifted_read_clock
+      initial begin
+        #(RD_PHASE_NS * 1ns);
+        forever #(RD_HALF_NS * 1ns) rd_clk_i = ~rd_clk_i;
+      end
+    end
+  endgenerate
 
   // Reference contents depend only on observed accepted transfers, not DUT
   // pointers or memory. The lock serializes queue operations at coincident

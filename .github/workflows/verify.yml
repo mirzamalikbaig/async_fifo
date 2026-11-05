@@ -17,11 +17,15 @@ jobs:
   regression:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      diagnostic: ${{ steps.simulation.outputs.diagnostic }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Verilator
         run: sudo apt-get update && sudo apt-get install -y verilator
       - name: Scoreboard, SVA, clock ratios, parameters, and checker fault injection
+        id: simulation
+        continue-on-error: true
         run: python3 scripts/regress.py
       - name: Keep simulation logs
         if: always()
@@ -29,3 +33,14 @@ jobs:
         with:
           name: fifo-verification-logs
           path: build/**/*.log
+      - name: Require a passing regression
+        if: steps.simulation.outcome != 'success'
+        run: exit 1
+  diagnostic:
+    needs: regression
+    if: always() && needs.regression.result == 'failure'
+    name: "${{ needs.regression.outputs.diagnostic || 'See FIFO verification logs' }}"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report regression failure
+        run: exit 1

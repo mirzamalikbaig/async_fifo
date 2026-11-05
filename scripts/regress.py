@@ -104,5 +104,13 @@ if __name__ == '__main__':
     try:
         main()
     except (RuntimeError, subprocess.SubprocessError) as error:
-        print(error, file=sys.stderr)
+        message = str(error)
+        print(message, file=sys.stderr)
+        # Surface the first actionable diagnostic in the read-only CI job name.
+        lines = message.splitlines()
+        diagnostic = next((line for line in lines if '%Error' in line or
+                           'Assertion failed' in line or 'Scoreboard:' in line), lines[0])
+        if os.getenv('GITHUB_OUTPUT'):
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+                stream.write('diagnostic=' + diagnostic[:220] + '\n')
         sys.exit(1)
