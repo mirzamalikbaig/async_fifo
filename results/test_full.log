@@ -1,0 +1,43 @@
+Chronologic VCS simulator
+Compiler version X-2025.06-SP1_Full64; Runtime version X-2025.06-SP1_Full64; Nov 5 08:36 2026
+
+running test_full
+reset done: full=0 empty=1
+write: data=24 full=0 overflow=0
+write: data=81 full=0 overflow=0
+write: data=09 full=0 overflow=0
+write: data=63 full=0 overflow=0
+write: data=0d full=0 overflow=0
+write: data=8d full=0 overflow=0
+write: data=65 full=0 overflow=0
+write: data=12 full=0 overflow=0
+write: data=01 full=0 overflow=0
+write: data=0d full=0 overflow=0
+write: data=76 full=0 overflow=0
+write: data=3d full=0 overflow=0
+write: data=ed full=0 overflow=0
+write: data=8c full=0 overflow=0
+write: data=f9 full=0 overflow=0
+write: data=c6 full=1 overflow=0
+read:  data=24 empty=0 underflow=0
+read:  data=81 empty=0 underflow=0
+read:  data=09 empty=0 underflow=0
+read:  data=63 empty=0 underflow=0
+read:  data=0d empty=0 underflow=0
+read:  data=8d empty=0 underflow=0
+read:  data=65 empty=0 underflow=0
+read:  data=12 empty=0 underflow=0
+read:  data=01 empty=0 underflow=0
+read:  data=0d empty=0 underflow=0
+read:  data=76 empty=0 underflow=0
+read:  data=3d empty=0 underflow=0
+read:  data=ed empty=0 underflow=0
+read:  data=8c empty=0 underflow=0
+read:  data=f9 empty=0 underflow=0
+read:  data=c6 empty=1 underflow=0
+simulation done: full=0 empty=1
+$finish called from file "testbench.sv", line 139.
+$finish at simulation time               506000
+           V C S   S i m u l a t i o n   R e p o r t
+Time: 506000 ps
+CPU Time:      0.510 seconds;       Data structure size:   0.0Mb
