@@ -18,7 +18,10 @@ module async_fifo #(
   output logic                  underflow_o
 );
 
-  // One extra pointer bit distinguishes successive laps around the memory.
+  // Binary pointers select memory addresses. The extra bit records a lap
+  // around the FIFO, so a full FIFO can be distinguished from an empty one.
+  // For DEPTH=16 the pointers are 5 bits and FULL_MASK is 5'b11000.
+  // XOR with this mask flips the top two bits for the full comparison.
   localparam logic [PTR_WIDTH:0] FULL_MASK = {2'b11, {(PTR_WIDTH-1){1'b0}}};
   logic [PTR_WIDTH:0] wr_bin, wr_bin_next, wr_gray, wr_gray_next;
   logic [PTR_WIDTH:0] rd_bin, rd_bin_next, rd_gray, rd_gray_next;
@@ -26,7 +29,8 @@ module async_fifo #(
   logic full_next, empty_next;
   logic wr_reset, rd_reset;
 
-  // Asynchronous assertion, synchronous release in each local clock domain.
+  // Reset goes high immediately. After rst_i goes low, each clock shifts
+  // two zeros through its reset pipe before that side starts operating.
   (* ASYNC_REG = "TRUE" *) logic [1:0] wr_reset_pipe, rd_reset_pipe;
   always_ff @(posedge wr_clk_i or posedge rst_i) begin
     if (rst_i) wr_reset_pipe <= '1;
@@ -62,8 +66,9 @@ module async_fifo #(
     end
   end
 
-  assign wr_bin_next  = wr_bin + {{PTR_WIDTH{1'b0}}, (wr_en_i && !full_o)};
-  assign rd_bin_next  = rd_bin + {{PTR_WIDTH{1'b0}}, (rd_en_i && !empty_o)};
+  assign wr_bin_next  = (wr_en_i && !full_o) ? wr_bin + 1'b1 : wr_bin;
+  assign rd_bin_next  = (rd_en_i && !empty_o) ? rd_bin + 1'b1 : rd_bin;
+  // Convert the next binary values to Gray code using shift and XOR.
   assign wr_gray_next = (wr_bin_next >> 1) ^ wr_bin_next;
   assign rd_gray_next = (rd_bin_next >> 1) ^ rd_bin_next;
   // In Gray space, full requires inversion of the TOP TWO pointer bits.

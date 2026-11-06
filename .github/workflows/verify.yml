@@ -23,10 +23,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Verilator
         run: sudo apt-get update && sudo apt-get install -y verilator
-      - name: Scoreboard, SVA, clock ratios, parameters, and checker fault injection
+      - name: Run beginner FIFO tests
         id: simulation
         continue-on-error: true
-        run: python3 scripts/regress.py
+        run: |
+          mkdir -p build
+          set +e
+          python3 scripts/regress.py verilator 2>&1 | tee build/regression.log
+          result=${PIPESTATUS[0]}
+          diagnostic=$(sed -n '/%Error\|Assertion failed\|Data mismatch/p' build/regression.log | head -n 1)
+          echo "diagnostic=$diagnostic" >> "$GITHUB_OUTPUT"
+          if [ "$result" -ne 0 ]; then exit "$result"; fi
+          ./build/obj_dir/Vtb +TEST=all 2>&1 | tee build/all.log
       - name: Keep simulation logs
         if: always()
         uses: actions/upload-artifact@v4

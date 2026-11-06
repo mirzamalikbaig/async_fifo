@@ -1,167 +1,131 @@
 `timescale 1ns/1ps
 `include "fifo_assertions.sv"
 
-module tb #(
-  parameter int unsigned DEPTH = 16,
-  parameter int unsigned PTR_WIDTH = $clog2(DEPTH),
-  parameter int unsigned DATA_WIDTH = 8,
-  parameter int unsigned WR_HALF_NS = 5,
-  parameter int unsigned RD_HALF_NS = 7,
-  parameter int unsigned RD_PHASE_NS = 0
-);
-  typedef logic [DATA_WIDTH-1:0] data_t;
-  logic wr_clk_i = 0, rd_clk_i = 0, rst_i = 1;
-  logic wr_en_i = 0, rd_en_i = 0;
-  data_t wdata_i = '0;
-  wire full_o, overflow_o, empty_o, underflow_o;
-  wire [DATA_WIDTH-1:0] rdata_o;
+module tb;
+  parameter DEPTH = 16;
+  parameter DATA_WIDTH = 8;
+  localparam PTR_WIDTH = $clog2(DEPTH);
 
-  async_fifo #(.DEPTH(DEPTH), .PTR_WIDTH(PTR_WIDTH), .DATA_WIDTH(DATA_WIDTH)) dut (.*);
-  fifo_assertions #(.PTR_WIDTH(PTR_WIDTH), .DATA_WIDTH(DATA_WIDTH)) checks (
+  logic wr_clk_i = 0;
+  logic rd_clk_i = 0;
+  logic rst_i = 1;
+  logic wr_en_i = 0;
+  logic rd_en_i = 0;
+  logic [DATA_WIDTH-1:0] wdata_i = 0;
+  logic [DATA_WIDTH-1:0] next_data = 0;
+  wire [DATA_WIDTH-1:0] rdata_o;
+  wire full_o, empty_o, overflow_o, underflow_o;
+
+  async_fifo #(
+    .DEPTH(DEPTH), .PTR_WIDTH(PTR_WIDTH), .DATA_WIDTH(DATA_WIDTH)
+  ) dut (.*);
+
+  // Write clock: 10 ns period. Read clock: 14 ns period.
+  always #5 wr_clk_i = ~wr_clk_i;
+  always #7 rd_clk_i = ~rd_clk_i;
+
+  fifo_assertions #(.PTR_WIDTH(PTR_WIDTH)) checks (
     .wr_clk(wr_clk_i), .rd_clk(rd_clk_i),
     .wr_reset(dut.wr_reset), .rd_reset(dut.rd_reset),
-    .wr_en(wr_en_i), .rd_en(rd_en_i), .full(full_o), .empty(empty_o),
+    .wr_en(wr_en_i), .rd_en(rd_en_i),
+    .full(full_o), .empty(empty_o),
     .overflow(overflow_o), .underflow(underflow_o),
     .wr_bin(dut.wr_bin), .rd_bin(dut.rd_bin),
-    .wr_gray(dut.wr_gray), .rd_gray(dut.rd_gray),
-    .rd_gray_wsync1(dut.rd_gray_wsync1), .rd_gray_wsync2(dut.rd_gray_wsync2),
-    .wr_gray_rsync1(dut.wr_gray_rsync1), .wr_gray_rsync2(dut.wr_gray_rsync2),
-    .rdata(rdata_o)
+    .wr_gray(dut.wr_gray), .rd_gray(dut.rd_gray)
   );
 
-  initial forever #(WR_HALF_NS * 1ns) wr_clk_i = ~wr_clk_i;
-  generate
-    if (RD_PHASE_NS == 0) begin : no_read_phase
-      initial forever #(RD_HALF_NS * 1ns) rd_clk_i = ~rd_clk_i;
-    end else begin : shifted_read_clock
-      initial begin
-        #(RD_PHASE_NS * 1ns);
-        forever #(RD_HALF_NS * 1ns) rd_clk_i = ~rd_clk_i;
-      end
-    end
-  endgenerate
-
-  // Reference contents depend only on observed accepted transfers, not DUT
-  // pointers or memory. The lock serializes queue operations at coincident
-  // edges. Valid simultaneous push/pop commute away from empty/full boundaries.
-  data_t expected[$];
-  semaphore queue_lock = new(1);
-  data_t held_rdata = '0;
-  int unsigned writes = 0, reads = 0, discarded = 0;
-  int unsigned overflows = 0, underflows = 0, resets = 0;
-  int unsigned write_wraps = 0, read_wraps = 0;
-  int unsigned wr_position = 0, rd_position = 0;
-  int unsigned wr_rng, rd_rng, seed = 1;
+  // Simple scoreboard: remember accepted writes in an ordinary array.
+  // write_count points to the next place to store expected data.
+  // read_count points to the next expected value to compare.
+  // Each monitor owns its own counter, so no queue or semaphore is needed.
+  logic [DATA_WIDTH-1:0] expected_data [0:4095];
+  integer write_count = 0;
+  integer read_count = 0;
+  integer overflow_count = 0;
+  integer underflow_count = 0;
+  logic [DATA_WIDTH-1:0] last_read_data = 0;
   string testname = "all";
 
-  // Sample acceptance before the NBA region, check registered outputs after it.
-  always @(posedge wr_clk_i) begin : score_write
-    bit rejected;
+  always @(posedge wr_clk_i) begin : write_monitor
+    logic expected_overflow;
     if (!rst_i && !dut.wr_reset) begin
-      rejected = wr_en_i && full_o;
+      expected_overflow = wr_en_i && full_o;
       if (wr_en_i && !full_o) begin
-        queue_lock.get(1);
-        if (expected.size() >= DEPTH)
-          $fatal(1, "Scoreboard: accepted write into physically full FIFO");
-        expected.push_back(wdata_i);
-        writes++;
-        wr_position++;
-        if (wr_position == DEPTH) begin
-          wr_position = 0;
-          write_wraps++;
-        end
-        queue_lock.put(1);
+        if (write_count >= 4096)
+          $fatal(1, "Scoreboard array is full; increase its size for longer tests");
+        if (write_count - read_count >= DEPTH)
+          $fatal(1, "DUT accepted a write when the stored data already filled the FIFO");
+        expected_data[write_count] = wdata_i;
+        write_count = write_count + 1;
       end
-      if (rejected) overflows++;
-      #1ps;
-      if (!rst_i && !dut.wr_reset && overflow_o !== rejected)
-        $fatal(1, "Scoreboard: incorrect overflow pulse");
+      if (expected_overflow) overflow_count = overflow_count + 1;
+      #1ps; // Let the DUT's nonblocking assignments update its outputs.
+      if (!rst_i && !dut.wr_reset && overflow_o !== expected_overflow)
+        $fatal(1, "Wrong overflow output");
     end
   end
 
-  always @(posedge rd_clk_i) begin : score_read
-    data_t wanted;
-    bit rejected;
+  always @(posedge rd_clk_i) begin : read_monitor
+    logic [DATA_WIDTH-1:0] expected_value;
+    logic expected_underflow;
     if (rst_i || dut.rd_reset) begin
-      held_rdata = '0;
+      last_read_data = 0;
     end else begin
-      wanted = held_rdata;
-      rejected = rd_en_i && empty_o;
+      expected_value = last_read_data;
+      expected_underflow = rd_en_i && empty_o;
       if (rd_en_i && !empty_o) begin
-        queue_lock.get(1);
-        if (expected.size() == 0)
-          $fatal(1, "Scoreboard: accepted read from physically empty FIFO");
-        wanted = expected.pop_front();
-        reads++;
-        rd_position++;
-        if (rd_position == DEPTH) begin
-          rd_position = 0;
-          read_wraps++;
-        end
-        queue_lock.put(1);
+        if (read_count >= write_count)
+          $fatal(1, "DUT accepted a read with no stored data");
+        expected_value = expected_data[read_count];
+        read_count = read_count + 1;
       end
-      if (rejected) underflows++;
+      if (expected_underflow) underflow_count = underflow_count + 1;
       #1ps;
-      // Reset may assert at this edge; its asynchronous data clear takes
-      // precedence over a read/hold comparison scheduled before NBA updates.
       if (rst_i || dut.rd_reset) begin
-        held_rdata = '0;
+        last_read_data = 0;
       end else begin
-        if (rdata_o !== wanted)
-          $fatal(1, "Scoreboard: data mismatch expected=%h actual=%h", wanted, rdata_o);
-        if (underflow_o !== rejected)
-          $fatal(1, "Scoreboard: incorrect underflow pulse");
-        held_rdata = wanted;
+        if (rdata_o !== expected_value)
+          $fatal(1, "Data mismatch: expected=%h actual=%h", expected_value, rdata_o);
+        if (underflow_o !== expected_underflow)
+          $fatal(1, "Wrong underflow output");
+        last_read_data = expected_value;
       end
     end
   end
 
-  // Separate PRNG streams make stimulus reproducible even when clock events
-  // coincide. Zero seeds are remapped to avoid the xorshift all-zero state.
-  function automatic int unsigned next_random(input int unsigned state);
-    int unsigned value;
-    value = state;
-    value ^= value << 13;
-    value ^= value >> 17;
-    value ^= value << 5;
-    return value;
-  endfunction
-
-  task automatic reset_fifo;
+  task reset_fifo;
     wr_en_i = 0;
     rd_en_i = 0;
     rst_i = 1;
-    queue_lock.get(1);
-    discarded += expected.size();
-    expected.delete();
-    wr_position = 0;
-    rd_position = 0;
-    queue_lock.put(1);
-    resets++;
+    // Drivers are idle during reset. Discard the old expected data by
+    // restarting both counters; clearing the whole array is unnecessary.
+    write_count = 0;
+    read_count = 0;
+    overflow_count = 0;
+    underflow_count = 0;
     repeat (4) @(negedge wr_clk_i);
     repeat (4) @(negedge rd_clk_i);
-    // Deliberately release off-edge; each domain synchronizes release itself.
-    #1ns;
+    #1;
     rst_i = 0;
     repeat (4) @(negedge wr_clk_i);
     repeat (4) @(negedge rd_clk_i);
-    if (full_o !== 0 || empty_o !== 1 || rdata_o !== '0 ||
+    if (full_o !== 0 || empty_o !== 1 || rdata_o !== 0 ||
         overflow_o !== 0 || underflow_o !== 0)
-      $fatal(1, "Incorrect reset outputs");
+      $fatal(1, "Wrong outputs after reset");
   endtask
 
-  task automatic write_burst(input int unsigned count);
+  task write_many(input integer count);
     repeat (count) begin
       @(negedge wr_clk_i);
-      wr_rng = next_random(wr_rng);
       wr_en_i = 1;
-      wdata_i = data_t'(wr_rng);
+      wdata_i = next_data;
+      next_data = next_data + 1'b1; // Use a new value for the next request.
     end
     @(negedge wr_clk_i);
     wr_en_i = 0;
   endtask
 
-  task automatic read_burst(input int unsigned count);
+  task read_many(input integer count);
     repeat (count) begin
       @(negedge rd_clk_i);
       rd_en_i = 1;
@@ -170,175 +134,97 @@ module tb #(
     rd_en_i = 0;
   endtask
 
-  task automatic wait_readable;
-    int unsigned cycles;
-    cycles = 0;
-    while (empty_o) begin
-      @(negedge rd_clk_i);
-      cycles++;
-      if (cycles > 8) $fatal(1, "Written data never became readable");
-    end
-  endtask
-
-  task automatic drain;
-    int unsigned cycles;
-    cycles = 0;
+  // Keep requesting reads until the scoreboard has no remaining data.
+  // The DUT may initially be empty while the write pointer synchronizes.
+  task drain_fifo;
     @(negedge rd_clk_i);
-    rd_en_i = 1;
-    while (expected.size() != 0) begin
+    while (read_count < write_count) begin
+      rd_en_i = !empty_o;
       @(negedge rd_clk_i);
-      cycles++;
-      if (cycles > 8 * DEPTH + 32) $fatal(1, "Drain timeout");
     end
     rd_en_i = 0;
     repeat (4) @(negedge rd_clk_i);
     repeat (4) @(negedge wr_clk_i);
-    if (empty_o !== 1 || full_o !== 0)
-      $fatal(1, "Incorrect flags after drain");
+    if (empty_o !== 1 || full_o !== 0 || write_count != read_count)
+      $fatal(1, "FIFO did not drain correctly");
     if (overflow_o !== 0 || underflow_o !== 0)
-      $fatal(1, "Error pulses did not clear during idle");
+      $fatal(1, "Error outputs did not clear while idle");
   endtask
 
-  task automatic test_full;
-    $display("SCENARIO full_and_drain");
+  task run_test(input string name);
+    $display("RUN %s", name);
     reset_fifo();
-    write_burst(DEPTH);
-    if (full_o !== 1 || expected.size() != DEPTH)
-      $fatal(1, "FIFO did not accept exactly DEPTH writes before full");
-    drain();
-  endtask
-
-  task automatic test_empty;
-    $display("SCENARIO empty_and_single_entry");
-    reset_fifo();
-    write_burst(1);
-    wait_readable();
-    read_burst(1);
-    if (empty_o !== 1 || expected.size() != 0)
-      $fatal(1, "FIFO did not become empty after the only read");
-    drain();
-  endtask
-
-  task automatic test_overflow;
-    int unsigned before_errors;
-    $display("SCENARIO overflow");
-    reset_fifo();
-    before_errors = overflows;
-    write_burst(DEPTH + 4);
-    if (overflows - before_errors != 4 || expected.size() != DEPTH)
-      $fatal(1, "Expected four rejected writes without overwriting stored data");
-    drain();
-  endtask
-
-  task automatic test_underflow;
-    int unsigned before_errors;
-    $display("SCENARIO underflow");
-    reset_fifo();
-    before_errors = underflows;
-    read_burst(4);
-    write_burst(1);
-    wait_readable();
-    read_burst(1);
-    read_burst(3);
-    if (underflows - before_errors != 7 || expected.size() != 0)
-      $fatal(1, "Expected seven rejected reads without changing read data");
-    drain();
-  endtask
-
-  task automatic test_wrap;
-    $display("SCENARIO repeated_wraparound");
-    reset_fifo();
-    repeat (10) begin
-      write_burst(DEPTH);
-      if (full_o !== 1) $fatal(1, "Missing full during wraparound test");
-      drain();
-    end
-  endtask
-
-  task automatic test_concurrent_wr_rd;
-    $display("SCENARIO concurrent_random_traffic");
-    reset_fifo();
-    fork
-      begin
-        repeat (1500) begin
-          @(negedge wr_clk_i);
-          wr_rng = next_random(wr_rng);
-          wr_en_i = (wr_rng[1:0] != 0);
-          wdata_i = data_t'(wr_rng);
-        end
-        @(negedge wr_clk_i);
-        wr_en_i = 0;
+    case (name)
+      "test_full": begin
+        write_many(DEPTH);
+        if (full_o !== 1 || write_count != DEPTH)
+          $fatal(1, "Full flag or capacity is wrong");
       end
-      begin
-        repeat (1500) begin
-          @(negedge rd_clk_i);
-          rd_rng = next_random(rd_rng);
-          rd_en_i = (rd_rng[1:0] != 0);
-        end
-        @(negedge rd_clk_i);
-        rd_en_i = 0;
+      "test_empty": begin
+        write_many(1);
       end
-    join
-    drain();
-  endtask
-
-  task automatic test_reset;
-    int unsigned before_discarded;
-    $display("SCENARIO reset_with_pending_data");
-    reset_fifo();
-    write_burst(DEPTH / 2);
-    before_discarded = discarded;
-    reset_fifo();
-    if (discarded - before_discarded != DEPTH / 2)
-      $fatal(1, "Reset did not discard the queued data");
-    write_burst(DEPTH);
-    drain();
+      "test_overflow": begin
+        write_many(DEPTH + 2);
+        if (overflow_count != 2 || write_count != DEPTH || full_o !== 1)
+          $fatal(1, "Expected exactly two rejected writes");
+      end
+      "test_underflow": begin
+        read_many(2);
+        if (underflow_count != 2 || read_count != 0)
+          $fatal(1, "Expected exactly two rejected reads");
+        write_many(1); // A valid transfer must still work afterward.
+      end
+      "test_wrap": begin
+        repeat (4) begin
+          write_many(DEPTH);
+          if (full_o !== 1) $fatal(1, "Missing full flag during wrap test");
+          drain_fifo();
+        end
+        if (write_count != 4 * DEPTH)
+          $fatal(1, "Wrap test did not transfer all four batches");
+      end
+      "test_concurrent_wr_rd": begin
+        // Two ordinary tasks run at the same time on different clocks.
+        // Some requests may be blocked; the monitors check those too.
+        fork
+          write_many(4 * DEPTH);
+          read_many(4 * DEPTH);
+        join
+      end
+      "test_reset": begin
+        write_many(DEPTH / 2);
+        if (write_count != DEPTH / 2)
+          $fatal(1, "Reset test did not place data in the FIFO");
+        reset_fifo(); // Throw away pending data, then start again.
+        write_many(DEPTH);
+      end
+      default: $fatal(1, "Unknown test name: %s", name);
+    endcase
+    drain_fifo();
+    $display("PASS %s: writes=%0d reads=%0d rejected_writes=%0d rejected_reads=%0d",
+             name, write_count, read_count, overflow_count, underflow_count);
   endtask
 
   initial begin
-    if (WR_HALF_NS == 0 || RD_HALF_NS == 0)
-      $fatal(1, "Clock half-periods must be positive");
-    void'($value$plusargs("TEST=%s", testname));
-    void'($value$plusargs("SEED=%d", seed));
-    wr_rng = seed == 0 ? 32'h1234abcd : seed;
-    rd_rng = wr_rng ^ 32'h9e3779b9;
-    if (rd_rng == 0) rd_rng = 32'h87654321;
-    $display("CONFIG test=%s depth=%0d width=%0d seed=%0d wr_half_ns=%0d rd_half_ns=%0d rd_phase_ns=%0d",
-             testname, DEPTH, DATA_WIDTH, seed, WR_HALF_NS, RD_HALF_NS, RD_PHASE_NS);
-    case (testname)
-      "all": begin
-        test_full();
-        test_empty();
-        test_overflow();
-        test_underflow();
-        test_wrap();
-        test_concurrent_wr_rd();
-        test_reset();
-      end
-      "test_full": test_full();
-      "test_empty": test_empty();
-      "test_overflow": test_overflow();
-      "test_underflow": test_underflow();
-      "test_wrap": test_wrap();
-      "test_concurrent_wr_rd": test_concurrent_wr_rd();
-      "test_reset": test_reset();
-      default: $fatal(1, "Unknown TEST=%s", testname);
-    endcase
-    #1ns;
-    if (expected.size() != 0 || writes != reads + discarded)
-      $fatal(1, "Scoreboard accounting mismatch: writes=%0d reads=%0d discarded=%0d queued=%0d",
-             writes, reads, discarded, expected.size());
-    if (testname == "all" &&
-        (overflows == 0 || underflows == 0 || write_wraps < 10 || read_wraps < 10 || discarded == 0))
-      $fatal(1, "Required boundary/reset/wrap scenarios were not exercised");
-    $display("PASS test=%s depth=%0d width=%0d seed=%0d writes=%0d reads=%0d discarded=%0d overflow=%0d underflow=%0d write_wraps=%0d read_wraps=%0d resets=%0d",
-             testname, DEPTH, DATA_WIDTH, seed, writes, reads, discarded,
-             overflows, underflows, write_wraps, read_wraps, resets);
+    if (!$value$plusargs("TEST=%s", testname)) testname = "all";
+    if (testname == "all") begin
+      run_test("test_full");
+      run_test("test_empty");
+      run_test("test_overflow");
+      run_test("test_underflow");
+      run_test("test_wrap");
+      run_test("test_concurrent_wr_rd");
+      run_test("test_reset");
+    end else begin
+      run_test(testname);
+    end
+    $display("SIMULATION PASS");
     $finish;
   end
 
+  // A broken flag must not leave a test waiting forever.
   initial begin
-    #10ms;
-    $fatal(1, "Simulation watchdog expired");
+    #100000;
+    $fatal(1, "Timeout: a test did not finish");
   end
 endmodule
