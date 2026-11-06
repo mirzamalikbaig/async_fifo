@@ -4,7 +4,9 @@ import os
 import subprocess
 import sys
 
-simulator = sys.argv[1] if len(sys.argv) > 1 else "verilator"
+simulator = "verilator"
+if len(sys.argv) > 1:
+    simulator = sys.argv[1]
 os.makedirs("build", exist_ok=True)
 
 # subprocess.run executes a terminal command.
