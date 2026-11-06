@@ -131,7 +131,7 @@ GitHub Actions runs the Verilator regression and keeps a log. The default combin
 
 ## Validation and limits
 
-The simplified version is being validated before replacing the previous version on `main`.
+My simplified version passed all seven individual tests and the combined `all` run with the six assertions enabled. See the [verification run](https://github.com/mirzamalikbaig/async_fifo/actions/runs/42154577883) for the results and downloadable logs. These runs used Verilator; I have not rerun this simplified version with VCS.
 
 The old [VCS log](results/test_full.log) is from the original binary-pointer version and remains as history. It does not describe the current design.
 
